@@ -2,7 +2,7 @@ package dbcore
 
 import "regexp"
 
-var readQueryRe = regexp.MustCompile(`(?i)^\s*\(?\s*(SELECT|SHOW|EXPLAIN)\s`)
+var readQueryRe = regexp.MustCompile(`(?i)^\s*\(?\s*(SELECT|SHOW|EXPLAIN|PRAGMA)\s`)
 
 func isReadQuery(q string) bool {
 	return readQueryRe.MatchString(q)

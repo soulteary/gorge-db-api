@@ -45,10 +45,9 @@ func (s *DiffService) SetConnFactory(f dbcore.ConnFactory) {
 	s.connFactory = f
 }
 
-// LoadActualSchema queries INFORMATION_SCHEMA for all databases belonging
-// to the configured namespace, mirroring PhabricatorConfigSchemaQuery::loadActualSchemaForServer.
-func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.DatabaseRef) (*SchemaNode, error) {
+func (s *DiffService) buildDSN(ref *cluster.DatabaseRef) dbcore.DSN {
 	dsn := dbcore.DSN{
+		Driver:          s.config.Driver,
 		Host:            ref.Host,
 		Port:            ref.Port,
 		User:            ref.User,
@@ -56,12 +55,29 @@ func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.Databas
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 30,
 	}
+	if s.config.IsSQLite() {
+		dsn.Path = s.config.SQLitePath
+	}
+	return dsn
+}
+
+// LoadActualSchema queries the database schema for all databases belonging
+// to the configured namespace.
+func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.DatabaseRef) (*SchemaNode, error) {
+	dsn := s.buildDSN(ref)
 	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		return nil, fmt.Errorf("connect for schema: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
+	if s.config.IsSQLite() {
+		return s.loadSQLiteSchema(ctx, conn, ref)
+	}
+	return s.loadMySQLSchema(ctx, conn, ref)
+}
+
+func (s *DiffService) loadMySQLSchema(ctx context.Context, conn *dbcore.Conn, ref *cluster.DatabaseRef) (*SchemaNode, error) {
 	server := &SchemaNode{
 		RefKey: ref.RefKey(),
 		Status: "ok",
@@ -86,7 +102,7 @@ func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.Databas
 	}
 
 	for _, dbName := range databases {
-		dbNode, err := s.loadDatabaseSchema(ctx, conn, ref.RefKey(), dbName)
+		dbNode, err := s.loadMySQLDatabaseSchema(ctx, conn, ref.RefKey(), dbName)
 		if err != nil {
 			dbNode = &SchemaNode{RefKey: ref.RefKey(), Database: dbName, Status: "fail", Issues: []string{err.Error()}}
 		}
@@ -96,7 +112,7 @@ func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.Databas
 	return server, nil
 }
 
-func (s *DiffService) loadDatabaseSchema(ctx context.Context, conn *dbcore.Conn, refKey, dbName string) (*SchemaNode, error) {
+func (s *DiffService) loadMySQLDatabaseSchema(ctx context.Context, conn *dbcore.Conn, refKey, dbName string) (*SchemaNode, error) {
 	dbNode := &SchemaNode{
 		RefKey:   refKey,
 		Database: dbName,
@@ -150,6 +166,71 @@ func (s *DiffService) loadDatabaseSchema(ctx context.Context, conn *dbcore.Conn,
 	return dbNode, nil
 }
 
+func (s *DiffService) loadSQLiteSchema(ctx context.Context, conn *dbcore.Conn, ref *cluster.DatabaseRef) (*SchemaNode, error) {
+	refKey := ref.RefKey()
+	server := &SchemaNode{
+		RefKey: refKey,
+		Status: "ok",
+	}
+
+	dbNode := &SchemaNode{
+		RefKey:   refKey,
+		Database: s.config.SQLitePath,
+		Status:   "ok",
+	}
+
+	rows, err := conn.QueryContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		tables = append(tables, name)
+	}
+
+	for _, tableName := range tables {
+		tableNode := &SchemaNode{
+			RefKey:   refKey,
+			Database: s.config.SQLitePath,
+			Table:    tableName,
+			Status:   "ok",
+		}
+
+		colRows, err := conn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info('%s')", tableName))
+		if err == nil {
+			for colRows.Next() {
+				var cid int
+				var colName, colType string
+				var notNull, pk int
+				var dfltValue *string
+				if err := colRows.Scan(&cid, &colName, &colType, &notNull, &dfltValue, &pk); err != nil {
+					continue
+				}
+				tableNode.Children = append(tableNode.Children, &SchemaNode{
+					RefKey:   refKey,
+					Database: s.config.SQLitePath,
+					Table:    tableName,
+					Column:   colName,
+					Status:   "ok",
+				})
+			}
+			_ = colRows.Close()
+		}
+
+		dbNode.Children = append(dbNode.Children, tableNode)
+	}
+
+	server.Children = append(server.Children, dbNode)
+	return server, nil
+}
+
 type CharsetInfo struct {
 	RefKey         string `json:"ref_key"`
 	CharsetDefault string `json:"charset_default"`
@@ -176,14 +257,20 @@ func (s *DiffService) GetCharsetInfo(ctx context.Context) ([]CharsetInfo, error)
 }
 
 func (s *DiffService) charsetInfoForRef(ctx context.Context, ref *cluster.DatabaseRef) (*CharsetInfo, error) {
-	dsn := dbcore.DSN{
-		Host:            ref.Host,
-		Port:            ref.Port,
-		User:            ref.User,
-		Password:        s.password,
-		ConnTimeoutSec:  2,
-		QueryTimeoutSec: 10,
+	if s.config.IsSQLite() {
+		return &CharsetInfo{
+			RefKey:         ref.RefKey(),
+			CharsetDefault: "utf8",
+			CharsetSort:    "utf8",
+			CharsetFull:    "utf8",
+			CollateText:    "binary",
+			CollateSort:    "nocase",
+			CollateFull:    "nocase",
+		}, nil
 	}
+
+	dsn := s.buildDSN(ref)
+	dsn.QueryTimeoutSec = 10
 	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		return nil, err

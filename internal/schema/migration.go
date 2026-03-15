@@ -36,20 +36,28 @@ func (m *MigrationService) Status(ctx context.Context) ([]MigrationStatus, error
 	return statuses, nil
 }
 
-func (m *MigrationService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) MigrationStatus {
-	st := MigrationStatus{RefKey: ref.RefKey()}
-
-	metaDB := m.config.DatabaseName("meta_data")
+func (m *MigrationService) buildDSN(ref *cluster.DatabaseRef) dbcore.DSN {
 	dsn := dbcore.DSN{
+		Driver:          m.config.Driver,
 		Host:            ref.Host,
 		Port:            ref.Port,
 		User:            ref.User,
 		Password:        m.password,
-		Database:        metaDB,
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 10,
 	}
+	if m.config.IsSQLite() {
+		dsn.Path = m.config.SQLitePath
+	} else {
+		dsn.Database = m.config.DatabaseName("meta_data")
+	}
+	return dsn
+}
 
+func (m *MigrationService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) MigrationStatus {
+	st := MigrationStatus{RefKey: ref.RefKey()}
+
+	dsn := m.buildDSN(ref)
 	conn, err := m.connFactory(dsn, true)
 	if err != nil {
 		return st
@@ -79,12 +87,13 @@ func (m *MigrationService) checkRef(ctx context.Context, ref *cluster.DatabaseRe
 
 	st.TotalExpected = len(applied)
 
-	// Check hoststate for cluster sync (multi-master)
-	var stateValue *string
-	row := conn.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT stateValue FROM %s WHERE stateKey = 'cluster.databases'",
-			"hoststate"))
-	_ = row.Scan(&stateValue)
+	if !m.config.IsSQLite() {
+		var stateValue *string
+		row := conn.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT stateValue FROM %s WHERE stateKey = 'cluster.databases'",
+				"hoststate"))
+		_ = row.Scan(&stateValue)
+	}
 
 	return st
 }

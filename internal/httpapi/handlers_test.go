@@ -58,7 +58,7 @@ func authedReq(method, path string) *http.Request {
 func TestHealthPing(t *testing.T) {
 	e := echo.New()
 	deps, db, _ := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	rec := httptest.NewRecorder()
@@ -76,7 +76,7 @@ func TestHealthPing(t *testing.T) {
 func TestHealthPingRoot(t *testing.T) {
 	e := echo.New()
 	deps, db, _ := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	rec := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestHealthPingRoot(t *testing.T) {
 func TestTokenAuthMissing(t *testing.T) {
 	e := echo.New()
 	deps, db, _ := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	rec := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestTokenAuthMissing(t *testing.T) {
 func TestTokenAuthHeader(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -120,7 +120,7 @@ func TestTokenAuthHeader(t *testing.T) {
 func TestTokenAuthQueryParam(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -138,7 +138,7 @@ func TestTokenAuthQueryParam(t *testing.T) {
 func TestListServers(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -164,7 +164,7 @@ func TestListServers(t *testing.T) {
 func TestServerHealthFound(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -182,7 +182,7 @@ func TestServerHealthFound(t *testing.T) {
 func TestServerHealthNotFound(t *testing.T) {
 	e := echo.New()
 	deps, db, _ := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	rec := httptest.NewRecorder()
@@ -195,7 +195,7 @@ func TestServerHealthNotFound(t *testing.T) {
 func TestSetupIssues(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -223,7 +223,7 @@ func TestSetupIssues(t *testing.T) {
 func TestMigrationStatus(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectPing()
@@ -243,7 +243,7 @@ func TestMigrationStatus(t *testing.T) {
 func TestSchemaIssues(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectQuery("SELECT SCHEMA_NAME").WillReturnRows(
@@ -260,7 +260,7 @@ func TestSchemaIssues(t *testing.T) {
 func TestSchemaDiff(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectQuery("SELECT SCHEMA_NAME").WillReturnRows(
@@ -277,7 +277,7 @@ func TestSchemaDiff(t *testing.T) {
 func TestCharsetInfo(t *testing.T) {
 	e := echo.New()
 	deps, db, mock := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	mock.ExpectQuery("SELECT CHARACTER_SET_NAME").WillReturnRows(
@@ -294,7 +294,7 @@ func TestCharsetInfo(t *testing.T) {
 func TestRegisterRoutesAllEndpoints(t *testing.T) {
 	e := echo.New()
 	deps, db, _ := newMockDeps(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	RegisterRoutes(e, deps)
 
 	paths := make(map[string]bool)

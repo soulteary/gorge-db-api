@@ -60,6 +60,11 @@ func FromMySQLError(errno uint16, message string) *DBError {
 	return &DBError{Code: code, Message: message, MySQLErrno: errno}
 }
 
+// FromDriverError creates a DBError from a generic database error message.
+func FromDriverError(code ErrorCode, message string) *DBError {
+	return &DBError{Code: code, Message: message}
+}
+
 func NewClusterError(code ErrorCode, message string) *DBError {
 	return &DBError{Code: code, Message: message}
 }

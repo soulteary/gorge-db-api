@@ -116,7 +116,7 @@ func TestProbeRefConnFail(t *testing.T) {
 
 func TestProbeRefPingFail(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing().WillReturnError(sql.ErrConnDone)
 	mock.ExpectClose()
 
@@ -131,7 +131,7 @@ func TestProbeRefPingFail(t *testing.T) {
 
 func TestProbeRefMasterNoReplica(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"col1"}))
@@ -151,7 +151,7 @@ func TestProbeRefMasterNoReplica(t *testing.T) {
 
 func TestProbeRefReplicaNone(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"col1"}))
@@ -171,7 +171,7 @@ func TestProbeRefReplicaNone(t *testing.T) {
 
 func TestProbeRefMasterIsReplica(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"Seconds_Behind_Master"}).AddRow([]byte("5")))
@@ -191,7 +191,7 @@ func TestProbeRefMasterIsReplica(t *testing.T) {
 
 func TestProbeRefReplicaSlow(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"Seconds_Behind_Master"}).AddRow([]byte("120")))
@@ -211,7 +211,7 @@ func TestProbeRefReplicaSlow(t *testing.T) {
 
 func TestProbeRefReplicaOkay(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"Seconds_Behind_Master"}).AddRow([]byte("2")))
@@ -231,7 +231,7 @@ func TestProbeRefReplicaOkay(t *testing.T) {
 
 func TestProbeRefReplicaStatusAccessDenied(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnError(
 		sql.ErrNoRows)
@@ -248,7 +248,7 @@ func TestProbeRefReplicaStatusAccessDenied(t *testing.T) {
 
 func TestProbeRefReplicaNotReplicatingNilSBM(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"Other_Column"}).AddRow("value"))
@@ -265,7 +265,7 @@ func TestProbeRefReplicaNotReplicatingNilSBM(t *testing.T) {
 
 func TestQueryAllWithMock(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"col1"}))
@@ -288,7 +288,7 @@ func TestQueryAllWithMock(t *testing.T) {
 
 func TestQueryOneWithMock(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing()
 	mock.ExpectQuery("SHOW REPLICA STATUS").WillReturnRows(
 		sqlmock.NewRows([]string{"col1"}))
@@ -303,5 +303,65 @@ func TestQueryOneWithMock(t *testing.T) {
 	}
 	if found.ConnectionStatus != StatusOkay {
 		t.Errorf("expected StatusOkay, got %s", found.ConnectionStatus)
+	}
+}
+
+func TestProbeRefSQLiteOkay(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+	mock.ExpectPing()
+	mock.ExpectClose()
+
+	ref := &DatabaseRef{Host: "localhost", IsMaster: true}
+	cfg := &ClusterConfig{
+		Refs:       []*DatabaseRef{ref},
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &HealthService{config: cfg, connFactory: mockFactory(db)}
+	svc.probeRef(context.Background(), ref, "")
+
+	if ref.ConnectionStatus != StatusOkay {
+		t.Errorf("expected StatusOkay for SQLite, got %s", ref.ConnectionStatus)
+	}
+	if ref.ReplicaStatus != ReplicationOkay {
+		t.Errorf("expected ReplicationOkay for SQLite, got %s", ref.ReplicaStatus)
+	}
+}
+
+func TestProbeRefSQLiteConnFail(t *testing.T) {
+	ref := &DatabaseRef{Host: "localhost", IsMaster: true}
+	cfg := &ClusterConfig{
+		Refs:       []*DatabaseRef{ref},
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &HealthService{config: cfg, connFactory: failFactory()}
+	svc.probeRef(context.Background(), ref, "")
+
+	if ref.ConnectionStatus != StatusFail {
+		t.Errorf("expected StatusFail, got %s", ref.ConnectionStatus)
+	}
+}
+
+func TestQueryAllSQLite(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+	mock.ExpectPing()
+	mock.ExpectClose()
+
+	ref := &DatabaseRef{Host: "localhost", IsMaster: true}
+	cfg := &ClusterConfig{
+		Refs:       []*DatabaseRef{ref},
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &HealthService{config: cfg, connFactory: mockFactory(db)}
+	refs, err := svc.QueryAll(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].ConnectionStatus != StatusOkay {
+		t.Errorf("expected 1 ref with StatusOkay, got %v", refs)
 	}
 }

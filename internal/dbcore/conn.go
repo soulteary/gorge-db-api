@@ -7,34 +7,19 @@ import (
 	"time"
 
 	"github.com/soulteary/gorge-db-api/internal/compat"
-
-	"github.com/go-sql-driver/mysql"
 )
 
 type DSN struct {
+	Driver          DriverType
 	Host            string
 	Port            int
 	User            string
 	Password        string
 	Database        string
+	Path            string // SQLite file path
 	MaxRetries      int
 	ConnTimeoutSec  int
 	QueryTimeoutSec int
-}
-
-func (d DSN) String() string {
-	cfg := mysql.NewConfig()
-	cfg.User = d.User
-	cfg.Passwd = d.Password
-	cfg.Net = "tcp"
-	cfg.Addr = fmt.Sprintf("%s:%d", d.Host, d.Port)
-	cfg.DBName = d.Database
-	cfg.Timeout = time.Duration(d.ConnTimeoutSec) * time.Second
-	cfg.ReadTimeout = time.Duration(d.QueryTimeoutSec) * time.Second
-	cfg.WriteTimeout = time.Duration(d.QueryTimeoutSec) * time.Second
-	cfg.ParseTime = true
-	cfg.InterpolateParams = true
-	return cfg.FormatDSN()
 }
 
 type Conn struct {
@@ -44,13 +29,27 @@ type Conn struct {
 }
 
 func NewConn(dsn DSN, readOnly bool) (*Conn, error) {
-	db, err := sql.Open("mysql", dsn.String())
+	dt := dsn.Driver
+	if dt == "" {
+		dt = DriverMySQL
+	}
+	drv, err := GetDriver(dt)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+
+	db, err := drv.Open(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	pool := drv.PoolDefaults()
+	db.SetMaxOpenConns(pool.MaxOpenConns)
+	db.SetMaxIdleConns(pool.MaxIdleConns)
+	if pool.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(time.Duration(pool.ConnMaxLifetime) * time.Second)
+	}
+
 	return &Conn{db: db, dsn: dsn, readOnly: readOnly}, nil
 }
 
@@ -76,6 +75,10 @@ func (c *Conn) IsReadOnly() bool {
 
 func (c *Conn) DB() *sql.DB {
 	return c.db
+}
+
+func (c *Conn) DSN() DSN {
+	return c.dsn
 }
 
 func (c *Conn) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {

@@ -74,7 +74,7 @@ func TestMigrationCheckRefConnFail(t *testing.T) {
 
 func TestMigrationCheckRefPingFail(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing().WillReturnError(sql.ErrConnDone)
 	mock.ExpectClose()
 
@@ -94,7 +94,7 @@ func TestMigrationCheckRefPingFail(t *testing.T) {
 
 func TestMigrationCheckRefSuccess(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT patch FROM patch_status").WillReturnRows(
@@ -126,7 +126,7 @@ func TestMigrationCheckRefSuccess(t *testing.T) {
 
 func TestMigrationCheckRefQueryFail(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT patch FROM patch_status").WillReturnError(sql.ErrConnDone)
@@ -151,7 +151,7 @@ func TestMigrationCheckRefQueryFail(t *testing.T) {
 
 func TestMigrationStatusIntegration(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT patch FROM patch_status").WillReturnRows(
@@ -174,6 +174,80 @@ func TestMigrationStatusIntegration(t *testing.T) {
 	}
 	if len(statuses) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if !statuses[0].Initialized || statuses[0].TotalExpected != 1 {
+		t.Errorf("unexpected: %+v", statuses[0])
+	}
+}
+
+func TestMigrationCheckRefSQLiteSuccess(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPing()
+	mock.ExpectQuery("SELECT patch FROM patch_status").WillReturnRows(
+		sqlmock.NewRows([]string{"patch"}).
+			AddRow("001.sql").AddRow("002.sql"))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost", IsMaster: true}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	factory := func(dsn dbcore.DSN, ro bool) (*dbcore.Conn, error) {
+		return dbcore.NewConnFromDB(db, dsn, ro), nil
+	}
+	svc := &MigrationService{config: cfg, connFactory: factory}
+	st := svc.checkRef(context.Background(), cfg.Refs[0])
+	if !st.Initialized {
+		t.Error("should be initialized")
+	}
+	if len(st.AppliedPatches) != 2 {
+		t.Errorf("expected 2 patches, got %d", len(st.AppliedPatches))
+	}
+}
+
+func TestMigrationCheckRefSQLiteConnFail(t *testing.T) {
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost", IsMaster: true}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &MigrationService{config: cfg, connFactory: failConnFactory()}
+	st := svc.checkRef(context.Background(), cfg.Refs[0])
+	if st.Initialized {
+		t.Error("should not be initialized on connection failure")
+	}
+}
+
+func TestMigrationStatusSQLiteIntegration(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPing()
+	mock.ExpectQuery("SELECT patch FROM patch_status").WillReturnRows(
+		sqlmock.NewRows([]string{"patch"}).AddRow("init.sql"))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost", IsMaster: true}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	factory := func(dsn dbcore.DSN, ro bool) (*dbcore.Conn, error) {
+		return dbcore.NewConnFromDB(db, dsn, ro), nil
+	}
+	svc := &MigrationService{config: cfg, connFactory: factory}
+	statuses, err := svc.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1, got %d", len(statuses))
 	}
 	if !statuses[0].Initialized || statuses[0].TotalExpected != 1 {
 		t.Errorf("unexpected: %+v", statuses[0])

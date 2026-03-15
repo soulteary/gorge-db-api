@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/soulteary/gorge-db-api/internal/cluster"
+	"github.com/soulteary/gorge-db-api/internal/dbcore"
 )
 
 func TestNewDiffService(t *testing.T) {
@@ -99,7 +100,7 @@ func TestLoadActualSchemaConnFail(t *testing.T) {
 
 func TestLoadActualSchemaEmpty(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT SCHEMA_NAME").WillReturnRows(
 		sqlmock.NewRows([]string{"SCHEMA_NAME", "DEFAULT_CHARACTER_SET_NAME", "DEFAULT_COLLATION_NAME"}))
@@ -121,7 +122,7 @@ func TestLoadActualSchemaEmpty(t *testing.T) {
 
 func TestLoadActualSchemaWithDatabase(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT SCHEMA_NAME").WillReturnRows(
 		sqlmock.NewRows([]string{"SCHEMA_NAME", "DEFAULT_CHARACTER_SET_NAME", "DEFAULT_COLLATION_NAME"}).
@@ -191,7 +192,7 @@ func TestCollectIssuesSkipsDisabled(t *testing.T) {
 
 func TestCollectIssuesWithTree(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT SCHEMA_NAME").WillReturnRows(
 		sqlmock.NewRows([]string{"SCHEMA_NAME", "DEFAULT_CHARACTER_SET_NAME", "DEFAULT_COLLATION_NAME"}))
@@ -225,7 +226,7 @@ func TestGetCharsetInfoConnFail(t *testing.T) {
 
 func TestGetCharsetInfoUTF8MB4(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT CHARACTER_SET_NAME").WillReturnRows(
 		sqlmock.NewRows([]string{"CHARACTER_SET_NAME"}).AddRow("utf8mb4"))
@@ -253,7 +254,7 @@ func TestGetCharsetInfoUTF8MB4(t *testing.T) {
 
 func TestGetCharsetInfoFallback(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT CHARACTER_SET_NAME").WillReturnError(sql.ErrNoRows)
 	mock.ExpectClose()
@@ -287,5 +288,78 @@ func TestGetCharsetInfoSkipsDisabled(t *testing.T) {
 	}
 	if len(infos) != 0 {
 		t.Errorf("expected 0, got %d", len(infos))
+	}
+}
+
+func TestGetCharsetInfoSQLite(t *testing.T) {
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost"}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &DiffService{config: cfg, connFactory: failConnFactory()}
+	infos, err := svc.GetCharsetInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1, got %d", len(infos))
+	}
+	if infos[0].CharsetDefault != "utf8" {
+		t.Errorf("expected utf8, got %q", infos[0].CharsetDefault)
+	}
+	if infos[0].CollateSort != "nocase" {
+		t.Errorf("expected nocase, got %q", infos[0].CollateSort)
+	}
+}
+
+func TestLoadActualSchemaSQLite(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT name FROM sqlite_master").WillReturnRows(
+		sqlmock.NewRows([]string{"name"}).
+			AddRow("users").
+			AddRow("posts"))
+	mock.ExpectQuery("PRAGMA table_info").WillReturnRows(
+		sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "id", "INTEGER", 1, nil, 1).
+			AddRow(1, "name", "TEXT", 0, nil, 0))
+	mock.ExpectQuery("PRAGMA table_info").WillReturnRows(
+		sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "id", "INTEGER", 1, nil, 1).
+			AddRow(1, "title", "TEXT", 0, nil, 0).
+			AddRow(2, "body", "TEXT", 0, nil, 0))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &DiffService{config: cfg, connFactory: mockConnFactory(db)}
+	node, err := svc.LoadActualSchema(context.Background(), &cluster.DatabaseRef{Host: "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Status != "ok" {
+		t.Errorf("expected ok, got %q", node.Status)
+	}
+	if len(node.Children) != 1 {
+		t.Fatalf("expected 1 db child, got %d", len(node.Children))
+	}
+	dbNode := node.Children[0]
+	if len(dbNode.Children) != 2 {
+		t.Fatalf("expected 2 tables, got %d", len(dbNode.Children))
+	}
+	if dbNode.Children[0].Table != "users" {
+		t.Errorf("expected users, got %q", dbNode.Children[0].Table)
+	}
+	if len(dbNode.Children[0].Children) != 2 {
+		t.Errorf("expected 2 columns in users, got %d", len(dbNode.Children[0].Children))
+	}
+	if len(dbNode.Children[1].Children) != 3 {
+		t.Errorf("expected 3 columns in posts, got %d", len(dbNode.Children[1].Children))
 	}
 }

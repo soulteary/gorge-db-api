@@ -130,7 +130,7 @@ func TestCheckRefConnectionFailed(t *testing.T) {
 
 func TestCheckRefPingFailed(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPing().WillReturnError(sql.ErrConnDone)
 	mock.ExpectClose()
 
@@ -147,7 +147,7 @@ func TestCheckRefPingFailed(t *testing.T) {
 
 func TestCheckRefFullPass(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT VERSION").WillReturnRows(
@@ -183,7 +183,7 @@ func TestCheckRefFullPass(t *testing.T) {
 
 func TestCheckRefNoInnoDB(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT VERSION").WillReturnRows(
@@ -224,7 +224,7 @@ func TestCheckRefNoInnoDB(t *testing.T) {
 
 func TestCheckRefMissingMetaData(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectPing()
 	mock.ExpectQuery("SELECT VERSION").WillReturnRows(
@@ -265,7 +265,7 @@ func TestCheckRefMissingMetaData(t *testing.T) {
 
 func TestCheckMySQLConfigAllWarnings(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(
 		sqlmock.NewRows([]string{"v"}).AddRow(int64(1024 * 1024)))
@@ -296,7 +296,7 @@ func TestCheckMySQLConfigAllWarnings(t *testing.T) {
 
 func TestCheckMySQLConfigAllGood(t *testing.T) {
 	db, mock, _ := sqlmock.New()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(
 		sqlmock.NewRows([]string{"v"}).AddRow(int64(64 * 1024 * 1024)))
@@ -341,5 +341,109 @@ func TestSetupCollectIssuesAggregates(t *testing.T) {
 	issues, _ := svc.CollectIssues(context.Background())
 	if len(issues) != 2 {
 		t.Errorf("expected 2 connection issues, got %d", len(issues))
+	}
+}
+
+func TestCheckSQLiteVersionPass(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPing()
+	mock.ExpectQuery("SELECT sqlite_version").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("3.45.0"))
+	mock.ExpectQuery("PRAGMA journal_mode").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("wal"))
+	mock.ExpectQuery("PRAGMA busy_timeout").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow(5000))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost"}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &SetupService{config: cfg, connFactory: mockConnFactory(db)}
+	issues := svc.checkRef(context.Background(), cfg.Refs[0])
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues, got %v", issues)
+	}
+}
+
+func TestCheckSQLiteVersionFail(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPing()
+	mock.ExpectQuery("SELECT sqlite_version").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("3.30.0"))
+	mock.ExpectQuery("PRAGMA journal_mode").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("wal"))
+	mock.ExpectQuery("PRAGMA busy_timeout").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow(5000))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost"}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &SetupService{config: cfg, connFactory: mockConnFactory(db)}
+	issues := svc.checkRef(context.Background(), cfg.Refs[0])
+	hasVersion := false
+	for _, i := range issues {
+		if i.Key == "sqlite.version" {
+			hasVersion = true
+		}
+	}
+	if !hasVersion {
+		t.Error("expected sqlite.version issue for old version")
+	}
+}
+
+func TestCheckSQLiteJournalModeWarning(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPing()
+	mock.ExpectQuery("SELECT sqlite_version").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("3.45.0"))
+	mock.ExpectQuery("PRAGMA journal_mode").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow("delete"))
+	mock.ExpectQuery("PRAGMA busy_timeout").WillReturnRows(
+		sqlmock.NewRows([]string{"v"}).AddRow(5000))
+	mock.ExpectClose()
+
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost"}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &SetupService{config: cfg, connFactory: mockConnFactory(db)}
+	issues := svc.checkRef(context.Background(), cfg.Refs[0])
+	hasJournal := false
+	for _, i := range issues {
+		if i.Key == "sqlite.journal_mode" {
+			hasJournal = true
+		}
+	}
+	if !hasJournal {
+		t.Error("expected sqlite.journal_mode issue")
+	}
+}
+
+func TestCheckSQLiteConnFail(t *testing.T) {
+	cfg := &cluster.ClusterConfig{
+		Refs:       []*cluster.DatabaseRef{{Host: "localhost"}},
+		Namespace:  "ns",
+		Driver:     dbcore.DriverSQLite,
+		SQLitePath: "/tmp/test.db",
+	}
+	svc := &SetupService{config: cfg, connFactory: failConnFactory()}
+	issues := svc.checkRef(context.Background(), cfg.Refs[0])
+	if len(issues) != 1 || issues[0].Key != "db.connection" {
+		t.Errorf("expected db.connection issue, got %v", issues)
 	}
 }

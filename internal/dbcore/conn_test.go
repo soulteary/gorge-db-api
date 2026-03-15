@@ -2,12 +2,30 @@ package dbcore
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mysql "github.com/go-sql-driver/mysql"
 	"github.com/soulteary/gorge-db-api/internal/compat"
 )
+
+func mysqlDSNString(d DSN) string {
+	cfg := mysql.NewConfig()
+	cfg.User = d.User
+	cfg.Passwd = d.Password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%d", d.Host, d.Port)
+	cfg.DBName = d.Database
+	cfg.Timeout = time.Duration(d.ConnTimeoutSec) * time.Second
+	cfg.ReadTimeout = time.Duration(d.QueryTimeoutSec) * time.Second
+	cfg.WriteTimeout = time.Duration(d.QueryTimeoutSec) * time.Second
+	cfg.ParseTime = true
+	cfg.InterpolateParams = true
+	return cfg.FormatDSN()
+}
 
 func TestIsReadQuery(t *testing.T) {
 	cases := []struct {
@@ -22,6 +40,10 @@ func TestIsReadQuery(t *testing.T) {
 		{"select * from foo", true},
 		{"  show databases", true},
 		{"  explain analyze SELECT 1", true},
+		{"PRAGMA table_info('foo')", true},
+		{"PRAGMA journal_mode", true},
+		{"PRAGMA busy_timeout", true},
+		{"  pragma table_info('bar')", true},
 		{"INSERT INTO foo VALUES (1)", false},
 		{"UPDATE foo SET a=1", false},
 		{"DELETE FROM foo", false},
@@ -41,7 +63,7 @@ func TestIsReadQuery(t *testing.T) {
 	}
 }
 
-func TestDSNString(t *testing.T) {
+func TestMySQLDriverDSNString(t *testing.T) {
 	dsn := DSN{
 		Host:            "db.example.com",
 		Port:            3306,
@@ -51,7 +73,7 @@ func TestDSNString(t *testing.T) {
 		ConnTimeoutSec:  10,
 		QueryTimeoutSec: 30,
 	}
-	s := dsn.String()
+	s := mysqlDSNString(dsn)
 	if !strings.Contains(s, "testuser") {
 		t.Errorf("DSN string should contain user, got %q", s)
 	}
@@ -75,15 +97,15 @@ func TestDSNString(t *testing.T) {
 	}
 }
 
-func TestDSNStringDifferentPorts(t *testing.T) {
+func TestMySQLDriverDSNDifferentPorts(t *testing.T) {
 	dsn := DSN{Host: "localhost", Port: 3307, User: "root"}
-	s := dsn.String()
+	s := mysqlDSNString(dsn)
 	if !strings.Contains(s, "localhost:3307") {
 		t.Errorf("expected localhost:3307, got %q", s)
 	}
 }
 
-func TestDSNStringTimeout(t *testing.T) {
+func TestMySQLDriverDSNTimeout(t *testing.T) {
 	dsn := DSN{
 		Host:            "localhost",
 		Port:            3306,
@@ -91,7 +113,7 @@ func TestDSNStringTimeout(t *testing.T) {
 		ConnTimeoutSec:  5,
 		QueryTimeoutSec: 15,
 	}
-	s := dsn.String()
+	s := mysqlDSNString(dsn)
 	if !strings.Contains(s, "timeout=5s") {
 		t.Errorf("DSN should contain timeout=5s, got %q", s)
 	}
@@ -310,5 +332,17 @@ func TestConnDB(t *testing.T) {
 	}
 	if conn.DB() != db {
 		t.Error("DB() should return the same *sql.DB")
+	}
+}
+
+func TestConnDSN(t *testing.T) {
+	db, _, _ := sqlmock.New()
+	defer func() { _ = db.Close() }()
+
+	dsn := DSN{Host: "myhost", Port: 3306, Database: "mydb"}
+	conn := NewConnFromDB(db, dsn, false)
+	got := conn.DSN()
+	if got.Host != "myhost" || got.Port != 3306 || got.Database != "mydb" {
+		t.Errorf("DSN() mismatch: %+v", got)
 	}
 }

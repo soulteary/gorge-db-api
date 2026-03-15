@@ -43,16 +43,7 @@ func (s *HealthService) QueryOne(ctx context.Context, refKey string, password st
 }
 
 func (s *HealthService) probeRef(ctx context.Context, ref *DatabaseRef, password string) {
-	dsn := dbcore.DSN{
-		Host:            ref.Host,
-		Port:            ref.Port,
-		User:            ref.User,
-		Password:        password,
-		MaxRetries:      0,
-		ConnTimeoutSec:  2,
-		QueryTimeoutSec: 2,
-	}
-
+	dsn := s.buildDSN(ref, password)
 	start := time.Now()
 
 	conn, err := s.connFactory(dsn, true)
@@ -71,8 +62,36 @@ func (s *HealthService) probeRef(ctx context.Context, ref *DatabaseRef, password
 		return
 	}
 
+	if s.config.IsSQLite() {
+		ref.ConnectionStatus = StatusOkay
+		ref.ConnectionLatency = time.Since(start).Seconds()
+		ref.ReplicaStatus = ReplicationOkay
+		return
+	}
+
+	s.probeMySQLReplication(ctx, conn, ref, start)
+}
+
+func (s *HealthService) buildDSN(ref *DatabaseRef, password string) dbcore.DSN {
+	dsn := dbcore.DSN{
+		Driver:          s.config.Driver,
+		Host:            ref.Host,
+		Port:            ref.Port,
+		User:            ref.User,
+		Password:        password,
+		MaxRetries:      0,
+		ConnTimeoutSec:  2,
+		QueryTimeoutSec: 2,
+	}
+	if s.config.IsSQLite() {
+		dsn.Path = s.config.SQLitePath
+	}
+	return dsn
+}
+
+func (s *HealthService) probeMySQLReplication(ctx context.Context, conn *dbcore.Conn, ref *DatabaseRef, start time.Time) {
 	var replicaRow *sql.Rows
-	replicaRow, err = conn.QueryContext(ctx, "SHOW REPLICA STATUS")
+	replicaRow, err := conn.QueryContext(ctx, "SHOW REPLICA STATUS")
 	if err != nil {
 		errMsg := err.Error()
 		if isAccessDenied(errMsg) {

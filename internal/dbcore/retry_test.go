@@ -3,6 +3,7 @@ package dbcore
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -23,40 +24,44 @@ func TestRetryPolicyZeroValue(t *testing.T) {
 	}
 }
 
-func TestIsMySQLRetryableWithRetryableCode(t *testing.T) {
-	err := &mysqldriver.MySQLError{Number: 2002, Message: "Connection Timeout"}
-	errno, retryable := isMySQLRetryable(err, retryableConnectCodes)
-	if !retryable {
+func TestMySQLDriverRetryableConnectErr(t *testing.T) {
+	drv, err := GetDriver(DriverMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mysqlErr := &mysqldriver.MySQLError{Number: 2002, Message: "Connection Timeout"}
+	if !drv.IsRetryableConnectErr(mysqlErr) {
 		t.Error("errno 2002 should be retryable for connect")
 	}
-	if errno != 2002 {
-		t.Errorf("expected errno 2002, got %d", errno)
-	}
 }
 
-func TestIsMySQLRetryableWithNonRetryableCode(t *testing.T) {
-	err := &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate key"}
-	errno, retryable := isMySQLRetryable(err, retryableConnectCodes)
-	if retryable {
+func TestMySQLDriverNonRetryableConnectErr(t *testing.T) {
+	drv, err := GetDriver(DriverMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mysqlErr := &mysqldriver.MySQLError{Number: 1062, Message: "Duplicate key"}
+	if drv.IsRetryableConnectErr(mysqlErr) {
 		t.Error("errno 1062 should not be retryable for connect")
 	}
-	if errno != 1062 {
-		t.Errorf("expected errno 1062, got %d", errno)
-	}
 }
 
-func TestIsMySQLRetryableWithNonMySQLError(t *testing.T) {
-	err := errors.New("generic error")
-	errno, retryable := isMySQLRetryable(err, retryableConnectCodes)
-	if retryable {
+func TestMySQLDriverGenericErrNotRetryable(t *testing.T) {
+	drv, err := GetDriver(DriverMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genericErr := errors.New("generic error")
+	if drv.IsRetryableConnectErr(genericErr) {
 		t.Error("non-MySQL error should not be retryable")
 	}
-	if errno != 0 {
-		t.Errorf("expected errno 0 for non-MySQL error, got %d", errno)
-	}
 }
 
-func TestIsMySQLRetryableQueryCodes(t *testing.T) {
+func TestMySQLDriverRetryableQueryErr(t *testing.T) {
+	drv, err := GetDriver(DriverMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		number    uint16
 		retryable bool
@@ -67,28 +72,10 @@ func TestIsMySQLRetryableQueryCodes(t *testing.T) {
 		{1045, false},
 	}
 	for _, tc := range cases {
-		err := &mysqldriver.MySQLError{Number: tc.number}
-		_, got := isMySQLRetryable(err, retryableQueryCodes)
+		mysqlErr := &mysqldriver.MySQLError{Number: tc.number}
+		_, got := drv.IsRetryableQueryErr(mysqlErr)
 		if got != tc.retryable {
-			t.Errorf("isMySQLRetryable(errno=%d, queryCodes) = %v, want %v", tc.number, got, tc.retryable)
-		}
-	}
-}
-
-func TestRetryableConnectCodesContent(t *testing.T) {
-	expected := []uint16{2002, 2003}
-	for _, code := range expected {
-		if !retryableConnectCodes[code] {
-			t.Errorf("expected code %d in retryableConnectCodes", code)
-		}
-	}
-}
-
-func TestRetryableQueryCodesContent(t *testing.T) {
-	expected := []uint16{2013, 2006}
-	for _, code := range expected {
-		if !retryableQueryCodes[code] {
-			t.Errorf("expected code %d in retryableQueryCodes", code)
+			t.Errorf("IsRetryableQueryErr(errno=%d) = %v, want %v", tc.number, got, tc.retryable)
 		}
 	}
 }
@@ -172,8 +159,8 @@ func TestQueryWithRetryReadNonMySQLError(t *testing.T) {
 	if qErr == nil {
 		t.Fatal("expected error")
 	}
-	if qErr.Error() != "network timeout" {
-		t.Errorf("expected 'network timeout', got %q", qErr.Error())
+	if !strings.Contains(qErr.Error(), "network timeout") {
+		t.Errorf("expected error containing 'network timeout', got %q", qErr.Error())
 	}
 }
 
@@ -208,4 +195,21 @@ func TestQueryWithRetryZeroAttempts(t *testing.T) {
 		t.Fatalf("unexpected error: %v", qErr)
 	}
 	_ = rows.Close()
+}
+
+func TestSQLiteDriverRegistered(t *testing.T) {
+	drv, err := GetDriver(DriverSQLite)
+	if err != nil {
+		t.Fatalf("SQLite driver not registered: %v", err)
+	}
+	if drv == nil {
+		t.Fatal("SQLite driver is nil")
+	}
+}
+
+func TestGetDriverUnknown(t *testing.T) {
+	_, err := GetDriver("unknown")
+	if err == nil {
+		t.Error("expected error for unknown driver")
+	}
 }

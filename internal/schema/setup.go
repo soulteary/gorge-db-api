@@ -59,11 +59,9 @@ func (s *SetupService) CollectIssues(ctx context.Context) ([]SetupIssue, error) 
 	return issues, nil
 }
 
-func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) []SetupIssue {
-	var issues []SetupIssue
-	refKey := ref.RefKey()
-
+func (s *SetupService) buildDSN(ref *cluster.DatabaseRef) dbcore.DSN {
 	dsn := dbcore.DSN{
+		Driver:          s.config.Driver,
 		Host:            ref.Host,
 		Port:            ref.Port,
 		User:            ref.User,
@@ -71,6 +69,17 @@ func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) [
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 10,
 	}
+	if s.config.IsSQLite() {
+		dsn.Path = s.config.SQLitePath
+	}
+	return dsn
+}
+
+func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) []SetupIssue {
+	var issues []SetupIssue
+	refKey := ref.RefKey()
+
+	dsn := s.buildDSN(ref)
 	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		issues = append(issues, SetupIssue{
@@ -89,14 +98,24 @@ func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) [
 		return issues
 	}
 
-	// Version check
+	if s.config.IsSQLite() {
+		issues = append(issues, s.checkSQLite(ctx, conn, refKey)...)
+		return issues
+	}
+
+	issues = append(issues, s.checkMySQL(ctx, conn, refKey)...)
+	return issues
+}
+
+func (s *SetupService) checkMySQL(ctx context.Context, conn *dbcore.Conn, refKey string) []SetupIssue {
+	var issues []SetupIssue
+
 	var version string
 	row := conn.QueryRowContext(ctx, "SELECT VERSION()")
 	if err := row.Scan(&version); err == nil {
 		issues = append(issues, s.checkVersion(refKey, version)...)
 	}
 
-	// InnoDB check
 	rows, err := conn.QueryContext(ctx, "SHOW ENGINES")
 	if err == nil {
 		hasInnoDB := false
@@ -119,7 +138,6 @@ func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) [
 		}
 	}
 
-	// meta_data check
 	metaDB := s.config.DatabaseName("meta_data")
 	dbRows, err := conn.QueryContext(ctx, "SHOW DATABASES")
 	if err == nil {
@@ -140,8 +158,47 @@ func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) [
 		}
 	}
 
-	// MySQL config checks
 	issues = append(issues, s.checkMySQLConfig(ctx, conn, refKey)...)
+	return issues
+}
+
+func (s *SetupService) checkSQLite(ctx context.Context, conn *dbcore.Conn, refKey string) []SetupIssue {
+	var issues []SetupIssue
+
+	var version string
+	row := conn.QueryRowContext(ctx, "SELECT sqlite_version()")
+	if err := row.Scan(&version); err == nil {
+		if compareVersions(version, "3.35.0") < 0 {
+			issues = append(issues, SetupIssue{
+				Key: "sqlite.version", Name: "Update SQLite",
+				Message: fmt.Sprintf("Running SQLite %s, minimum required is 3.35.0", version),
+				IsFatal: true, RefKey: refKey,
+			})
+		}
+	}
+
+	var journalMode string
+	row = conn.QueryRowContext(ctx, "PRAGMA journal_mode")
+	if err := row.Scan(&journalMode); err == nil {
+		if strings.ToLower(journalMode) != "wal" {
+			issues = append(issues, SetupIssue{
+				Key: "sqlite.journal_mode", Name: "WAL Mode Not Enabled",
+				Summary: "SQLite not using WAL journal mode",
+				Message: fmt.Sprintf("journal_mode=%s on %s, recommended WAL for concurrent access", journalMode, refKey),
+				RefKey:  refKey,
+			})
+		}
+	}
+
+	var busyTimeout int
+	row = conn.QueryRowContext(ctx, "PRAGMA busy_timeout")
+	if err := row.Scan(&busyTimeout); err == nil && busyTimeout < 1000 {
+		issues = append(issues, SetupIssue{
+			Key: "sqlite.busy_timeout", Name: "Low Busy Timeout",
+			Message: fmt.Sprintf("busy_timeout=%d on %s, recommended >= 5000", busyTimeout, refKey),
+			RefKey:  refKey,
+		})
+	}
 
 	return issues
 }
@@ -173,7 +230,6 @@ func (s *SetupService) checkVersion(refKey, version string) []SetupIssue {
 func (s *SetupService) checkMySQLConfig(ctx context.Context, conn *dbcore.Conn, refKey string) []SetupIssue {
 	var issues []SetupIssue
 
-	// max_allowed_packet
 	var maxPacket int64
 	row := conn.QueryRowContext(ctx, "SELECT @@max_allowed_packet")
 	if err := row.Scan(&maxPacket); err == nil && maxPacket < 32*1024*1024 {
@@ -184,7 +240,6 @@ func (s *SetupService) checkMySQLConfig(ctx context.Context, conn *dbcore.Conn, 
 		})
 	}
 
-	// sql_mode
 	var sqlMode string
 	row = conn.QueryRowContext(ctx, "SELECT @@sql_mode")
 	if err := row.Scan(&sqlMode); err == nil {
@@ -198,7 +253,6 @@ func (s *SetupService) checkMySQLConfig(ctx context.Context, conn *dbcore.Conn, 
 		}
 	}
 
-	// innodb_buffer_pool_size
 	var poolSize int64
 	row = conn.QueryRowContext(ctx, "SELECT @@innodb_buffer_pool_size")
 	if err := row.Scan(&poolSize); err == nil && poolSize < 225*1024*1024 {
@@ -209,7 +263,6 @@ func (s *SetupService) checkMySQLConfig(ctx context.Context, conn *dbcore.Conn, 
 		})
 	}
 
-	// local_infile
 	var localInfile int
 	row = conn.QueryRowContext(ctx, "SELECT @@local_infile")
 	if err := row.Scan(&localInfile); err == nil && localInfile != 0 {
@@ -220,7 +273,6 @@ func (s *SetupService) checkMySQLConfig(ctx context.Context, conn *dbcore.Conn, 
 		})
 	}
 
-	// clock skew
 	var epoch int64
 	row = conn.QueryRowContext(ctx, "SELECT UNIX_TIMESTAMP()")
 	if err := row.Scan(&epoch); err == nil {

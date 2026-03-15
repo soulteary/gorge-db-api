@@ -107,6 +107,7 @@ func (r *DBRouter) getOrCreateConn(ref *DatabaseRef, app string, readOnly bool) 
 	r.mu.Unlock()
 
 	dsn := dbcore.DSN{
+		Driver:          r.config.Driver,
 		Host:            ref.Host,
 		Port:            ref.Port,
 		User:            ref.User,
@@ -115,6 +116,9 @@ func (r *DBRouter) getOrCreateConn(ref *DatabaseRef, app string, readOnly bool) 
 		MaxRetries:      3,
 		ConnTimeoutSec:  10,
 		QueryTimeoutSec: 30,
+	}
+	if r.config.IsSQLite() {
+		dsn.Path = r.config.SQLitePath
 	}
 
 	conn, err := dbcore.ConnectWithRetry(dsn, readOnly, dbcore.DefaultRetryPolicy())

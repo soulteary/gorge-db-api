@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/soulteary/gorge-db-api/internal/cluster"
+	"github.com/soulteary/gorge-db-api/internal/dbcore"
 	"github.com/soulteary/gorge-db-api/internal/httpapi"
 	"github.com/soulteary/gorge-db-api/internal/schema"
 
@@ -28,7 +29,10 @@ func main() {
 		cfg = cluster.LoadFromEnv()
 	}
 
-	password := os.Getenv("MYSQL_PASS")
+	var password string
+	if cfg.Driver != dbcore.DriverSQLite {
+		password = os.Getenv("MYSQL_PASS")
+	}
 
 	healthSvc := cluster.NewHealthService(cfg)
 	schemaSvc := schema.NewDiffService(cfg, password)

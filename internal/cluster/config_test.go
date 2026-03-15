@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/soulteary/gorge-db-api/internal/dbcore"
 )
 
 func TestBuildConfigIndividual(t *testing.T) {
@@ -434,5 +436,119 @@ func TestDatabaseNameVariousApps(t *testing.T) {
 		if got := cfg.DatabaseName(tc.app); got != tc.want {
 			t.Errorf("DatabaseName(%q) = %q, want %q", tc.app, got, tc.want)
 		}
+	}
+}
+
+func TestLoadFromEnvSQLite(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "/data/test.db")
+	t.Setenv("STORAGE_NAMESPACE", "myns")
+
+	cfg := LoadFromEnv()
+	if cfg.Driver != dbcore.DriverSQLite {
+		t.Errorf("expected driver sqlite, got %q", cfg.Driver)
+	}
+	if cfg.SQLitePath != "/data/test.db" {
+		t.Errorf("expected SQLitePath /data/test.db, got %q", cfg.SQLitePath)
+	}
+	if cfg.Namespace != "myns" {
+		t.Errorf("expected namespace myns, got %q", cfg.Namespace)
+	}
+	if !cfg.IsSQLite() {
+		t.Error("IsSQLite() should return true")
+	}
+	if len(cfg.Refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d", len(cfg.Refs))
+	}
+	ref := cfg.Refs[0]
+	if !ref.IsMaster || !ref.IsIndividual || !ref.IsDefaultPartition {
+		t.Error("sqlite ref should be master, individual, default")
+	}
+}
+
+func TestLoadFromEnvSQLiteDefaultPath(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("SQLITE_PATH", "")
+
+	cfg := LoadFromEnv()
+	if cfg.SQLitePath != "gorge.db" {
+		t.Errorf("expected default SQLitePath gorge.db, got %q", cfg.SQLitePath)
+	}
+}
+
+func TestLoadFromEnvDefaultDriverIsMySQL(t *testing.T) {
+	t.Setenv("DB_DRIVER", "")
+
+	cfg := LoadFromEnv()
+	if cfg.Driver != dbcore.DriverMySQL {
+		t.Errorf("expected default driver mysql, got %q", cfg.Driver)
+	}
+	if cfg.IsSQLite() {
+		t.Error("IsSQLite() should return false for mysql driver")
+	}
+}
+
+func TestBuildConfigSQLite(t *testing.T) {
+	raw := RawConfig{
+		Driver:     "sqlite",
+		SQLitePath: "/tmp/phorge.db",
+		Namespace:  "testns",
+	}
+	cfg := BuildConfig(raw)
+	if cfg.Driver != dbcore.DriverSQLite {
+		t.Errorf("expected driver sqlite, got %q", cfg.Driver)
+	}
+	if cfg.SQLitePath != "/tmp/phorge.db" {
+		t.Errorf("expected SQLitePath, got %q", cfg.SQLitePath)
+	}
+	if len(cfg.Refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d", len(cfg.Refs))
+	}
+	if !cfg.Refs[0].IsMaster {
+		t.Error("sqlite ref should be master")
+	}
+}
+
+func TestBuildConfigSQLiteDefaultPath(t *testing.T) {
+	raw := RawConfig{
+		Driver: "sqlite",
+	}
+	cfg := BuildConfig(raw)
+	if cfg.SQLitePath != "gorge.db" {
+		t.Errorf("expected default SQLitePath gorge.db, got %q", cfg.SQLitePath)
+	}
+}
+
+func TestBuildConfigDriverDefaultMySQL(t *testing.T) {
+	raw := RawConfig{}
+	cfg := BuildConfig(raw)
+	if cfg.Driver != dbcore.DriverMySQL {
+		t.Errorf("expected default driver mysql, got %q", cfg.Driver)
+	}
+}
+
+func TestLoadFromFileSQLite(t *testing.T) {
+	content := `{
+		"db.driver": "sqlite",
+		"sqlite.path": "/data/gorge.db",
+		"storage.default-namespace": "filens"
+	}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if cfg.Driver != dbcore.DriverSQLite {
+		t.Errorf("expected driver sqlite, got %q", cfg.Driver)
+	}
+	if cfg.SQLitePath != "/data/gorge.db" {
+		t.Errorf("expected /data/gorge.db, got %q", cfg.SQLitePath)
+	}
+	if cfg.Namespace != "filens" {
+		t.Errorf("expected filens, got %q", cfg.Namespace)
 	}
 }

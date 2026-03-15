@@ -4,15 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/soulteary/gorge-db-api/internal/dbcore"
 )
 
 // ClusterConfig holds the parsed cluster.databases configuration,
 // mirroring PhabricatorDatabaseRefParser behavior.
 type ClusterConfig struct {
-	Refs      []*DatabaseRef
-	Namespace string
-	masters   []*DatabaseRef
-	replicas  []*DatabaseRef
+	Refs       []*DatabaseRef
+	Namespace  string
+	Driver     dbcore.DriverType
+	SQLitePath string
+	masters    []*DatabaseRef
+	replicas   []*DatabaseRef
+}
+
+func (cc *ClusterConfig) IsSQLite() bool {
+	return cc.Driver == dbcore.DriverSQLite
 }
 
 // NodeSpec is the JSON shape of a single node in cluster.databases config.
@@ -34,6 +42,8 @@ type RawConfig struct {
 	MysqlPass  string     `json:"mysql.pass"`
 	Namespace  string     `json:"storage.default-namespace"`
 	ClusterDBs []NodeSpec `json:"cluster.databases"`
+	Driver     string     `json:"db.driver"`
+	SQLitePath string     `json:"sqlite.path"`
 }
 
 // LoadFromFile parses a Phorge-style local.json config file.
@@ -51,10 +61,30 @@ func LoadFromFile(path string) (*ClusterConfig, error) {
 
 // LoadFromEnv builds config from environment variables (individual mode).
 func LoadFromEnv() *ClusterConfig {
+	driverStr := envOr("DB_DRIVER", "mysql")
+	driver := dbcore.DriverType(driverStr)
+	ns := envOr("STORAGE_NAMESPACE", "phorge")
+
+	if driver == dbcore.DriverSQLite {
+		sqlitePath := envOr("SQLITE_PATH", "gorge.db")
+		ref := &DatabaseRef{
+			Host:               "localhost",
+			IsMaster:           true,
+			IsIndividual:       true,
+			IsDefaultPartition: true,
+		}
+		return &ClusterConfig{
+			Refs:       []*DatabaseRef{ref},
+			Namespace:  ns,
+			Driver:     driver,
+			SQLitePath: sqlitePath,
+			masters:    []*DatabaseRef{ref},
+		}
+	}
+
 	host := envOr("MYSQL_HOST", "127.0.0.1")
 	port := envIntOr("MYSQL_PORT", 3306)
 	user := envOr("MYSQL_USER", "root")
-	ns := envOr("STORAGE_NAMESPACE", "phorge")
 
 	ref := &DatabaseRef{
 		Host:               host,
@@ -67,6 +97,7 @@ func LoadFromEnv() *ClusterConfig {
 	return &ClusterConfig{
 		Refs:      []*DatabaseRef{ref},
 		Namespace: ns,
+		Driver:    driver,
 		masters:   []*DatabaseRef{ref},
 	}
 }
@@ -75,6 +106,27 @@ func BuildConfig(raw RawConfig) *ClusterConfig {
 	ns := raw.Namespace
 	if ns == "" {
 		ns = "phorge"
+	}
+
+	driver := dbcore.DriverType(raw.Driver)
+	if driver == "" {
+		driver = dbcore.DriverMySQL
+	}
+
+	if driver == dbcore.DriverSQLite {
+		ref := &DatabaseRef{
+			Host:               "localhost",
+			IsMaster:           true,
+			IsIndividual:       true,
+			IsDefaultPartition: true,
+		}
+		return &ClusterConfig{
+			Refs:       []*DatabaseRef{ref},
+			Namespace:  ns,
+			Driver:     driver,
+			SQLitePath: nonEmpty(raw.SQLitePath, "gorge.db"),
+			masters:    []*DatabaseRef{ref},
+		}
 	}
 
 	if len(raw.ClusterDBs) == 0 {
@@ -89,6 +141,7 @@ func BuildConfig(raw RawConfig) *ClusterConfig {
 		return &ClusterConfig{
 			Refs:      []*DatabaseRef{ref},
 			Namespace: ns,
+			Driver:    driver,
 			masters:   []*DatabaseRef{ref},
 		}
 	}
@@ -129,6 +182,7 @@ func BuildConfig(raw RawConfig) *ClusterConfig {
 	return &ClusterConfig{
 		Refs:      refs,
 		Namespace: ns,
+		Driver:    driver,
 		masters:   masters,
 		replicas:  replicas,
 	}
