@@ -8,6 +8,8 @@ import (
 	"github.com/soulteary/gorge-db-api/internal/httpapi"
 	"github.com/soulteary/gorge-db-api/internal/schema"
 
+	"log/slog"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -34,7 +36,27 @@ func main() {
 	migrationSvc := schema.NewMigrationService(cfg, password)
 
 	e := echo.New()
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogStatus:   true,
+		LogURI:      true,
+		LogMethod:   true,
+		LogLatency:  true,
+		LogError:    true,
+		HandleError: true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			attrs := []slog.Attr{
+				slog.String("method", v.Method),
+				slog.String("uri", v.URI),
+				slog.Int("status", v.Status),
+				slog.Duration("latency", v.Latency),
+			}
+			if v.Error != nil {
+				attrs = append(attrs, slog.String("error", v.Error.Error()))
+			}
+			slog.LogAttrs(c.Request().Context(), slog.LevelInfo, "REQUEST", attrs...)
+			return nil
+		},
+	}))
 	e.Use(middleware.Recover())
 
 	httpapi.RegisterRoutes(e, &httpapi.Deps{

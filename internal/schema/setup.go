@@ -31,12 +31,17 @@ type MigrationStatus struct {
 }
 
 type SetupService struct {
-	config   *cluster.ClusterConfig
-	password string
+	config      *cluster.ClusterConfig
+	password    string
+	connFactory dbcore.ConnFactory
 }
 
 func NewSetupService(config *cluster.ClusterConfig, password string) *SetupService {
-	return &SetupService{config: config, password: password}
+	return &SetupService{config: config, password: password, connFactory: dbcore.NewConn}
+}
+
+func (s *SetupService) SetConnFactory(f dbcore.ConnFactory) {
+	s.connFactory = f
 }
 
 // CollectIssues runs database-related setup checks mirroring
@@ -66,7 +71,7 @@ func (s *SetupService) checkRef(ctx context.Context, ref *cluster.DatabaseRef) [
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 10,
 	}
-	conn, err := dbcore.NewConn(dsn, true)
+	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		issues = append(issues, SetupIssue{
 			Key: "db.connection", Name: "Database Connection Failed",

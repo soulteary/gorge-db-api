@@ -12,11 +12,16 @@ import (
 // HealthService probes database nodes and populates health/replication status,
 // mirroring PhabricatorDatabaseRef::queryAll (behavior-spec section 5).
 type HealthService struct {
-	config *ClusterConfig
+	config      *ClusterConfig
+	connFactory dbcore.ConnFactory
 }
 
 func NewHealthService(config *ClusterConfig) *HealthService {
-	return &HealthService{config: config}
+	return &HealthService{config: config, connFactory: dbcore.NewConn}
+}
+
+func (s *HealthService) SetConnFactory(f dbcore.ConnFactory) {
+	s.connFactory = f
 }
 
 func (s *HealthService) QueryAll(ctx context.Context, password string) ([]*DatabaseRef, error) {
@@ -50,7 +55,7 @@ func (s *HealthService) probeRef(ctx context.Context, ref *DatabaseRef, password
 
 	start := time.Now()
 
-	conn, err := dbcore.NewConn(dsn, true)
+	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		ref.ConnectionStatus = StatusFail
 		ref.ConnectionMessage = err.Error()

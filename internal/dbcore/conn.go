@@ -54,6 +54,14 @@ func NewConn(dsn DSN, readOnly bool) (*Conn, error) {
 	return &Conn{db: db, dsn: dsn, readOnly: readOnly}, nil
 }
 
+// ConnFactory creates a Conn from a DSN. Override in tests to inject sqlmock.
+type ConnFactory func(dsn DSN, readOnly bool) (*Conn, error)
+
+// NewConnFromDB wraps an existing *sql.DB, useful for testing with sqlmock.
+func NewConnFromDB(db *sql.DB, dsn DSN, readOnly bool) *Conn {
+	return &Conn{db: db, dsn: dsn, readOnly: readOnly}
+}
+
 func (c *Conn) Ping(ctx context.Context) error {
 	return c.db.PingContext(ctx)
 }

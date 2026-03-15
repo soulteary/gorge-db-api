@@ -9,12 +9,17 @@ import (
 )
 
 type MigrationService struct {
-	config   *cluster.ClusterConfig
-	password string
+	config      *cluster.ClusterConfig
+	password    string
+	connFactory dbcore.ConnFactory
 }
 
 func NewMigrationService(config *cluster.ClusterConfig, password string) *MigrationService {
-	return &MigrationService{config: config, password: password}
+	return &MigrationService{config: config, password: password, connFactory: dbcore.NewConn}
+}
+
+func (m *MigrationService) SetConnFactory(f dbcore.ConnFactory) {
+	m.connFactory = f
 }
 
 // Status returns migration status for each ref, reading from {ns}_meta_data.patch_status.
@@ -45,7 +50,7 @@ func (m *MigrationService) checkRef(ctx context.Context, ref *cluster.DatabaseRe
 		QueryTimeoutSec: 10,
 	}
 
-	conn, err := dbcore.NewConn(dsn, true)
+	conn, err := m.connFactory(dsn, true)
 	if err != nil {
 		return st
 	}

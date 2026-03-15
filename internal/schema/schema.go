@@ -32,12 +32,17 @@ type SchemaIssue struct {
 }
 
 type DiffService struct {
-	config   *cluster.ClusterConfig
-	password string
+	config      *cluster.ClusterConfig
+	password    string
+	connFactory dbcore.ConnFactory
 }
 
 func NewDiffService(config *cluster.ClusterConfig, password string) *DiffService {
-	return &DiffService{config: config, password: password}
+	return &DiffService{config: config, password: password, connFactory: dbcore.NewConn}
+}
+
+func (s *DiffService) SetConnFactory(f dbcore.ConnFactory) {
+	s.connFactory = f
 }
 
 // LoadActualSchema queries INFORMATION_SCHEMA for all databases belonging
@@ -51,7 +56,7 @@ func (s *DiffService) LoadActualSchema(ctx context.Context, ref *cluster.Databas
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 30,
 	}
-	conn, err := dbcore.NewConn(dsn, true)
+	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		return nil, fmt.Errorf("connect for schema: %w", err)
 	}
@@ -179,7 +184,7 @@ func (s *DiffService) charsetInfoForRef(ctx context.Context, ref *cluster.Databa
 		ConnTimeoutSec:  2,
 		QueryTimeoutSec: 10,
 	}
-	conn, err := dbcore.NewConn(dsn, true)
+	conn, err := s.connFactory(dsn, true)
 	if err != nil {
 		return nil, err
 	}
