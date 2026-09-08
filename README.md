@@ -1,3 +1,7 @@
+项目合并至 https://github.com/soulteary/gorge 
+
+---
+
 # gorge-db-api
 
 Go 数据库管理 API 服务，为 Phorge 提供 Phorge 兼容的数据库基础设施 HTTP API。实现了与 Phorge PHP 端相同的数据库集群管理能力，包括健康探测、Schema 差异检查、安装检查和迁移状态查询。
